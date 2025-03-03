@@ -1,5 +1,4 @@
-use crate::cantypes::{PcanMsg, VciBoardInfo, VciCanObj, VciInitConfig};
-
+use crate::can::cantypes::*;
 use flume::Sender;
 use libloading::Library;
 use std::ffi::c_void;

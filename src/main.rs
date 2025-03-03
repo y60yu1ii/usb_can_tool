@@ -1,6 +1,5 @@
-mod canbus;
-mod cantypes;
-use crate::canbus::{CanApp, PcanApp};
+mod can;
+use crate::can::canbus::*;
 
 use flume::unbounded;
 use std::env;
