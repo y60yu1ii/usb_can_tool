@@ -107,13 +107,18 @@ fn main() {
                 eprintln!("ControlCAN open device failed");
                 return;
             }
+            can_app.start_receiving(
+                dev_type,
+                dev_index,
+                &can_channels.iter().map(|(ch, _)| *ch).collect::<Vec<u32>>(),
+                log_tx.clone(),
+                data_tx.clone(),
+            );
 
-            thread::spawn(move || {
-                loop {
-                    let data_rx_lock = data_rx.lock().unwrap(); // 🔹 確保獨占訪問
-                    if let Ok(data) = data_rx_lock.recv() {
-                        println!("[DATA] {}", data);
-                    }
+            thread::spawn(move || loop {
+                let data_rx_lock = data_rx.lock().unwrap();
+                if let Ok(data) = data_rx_lock.recv() {
+                    println!("[DATA] {}", data);
                 }
             });
 
