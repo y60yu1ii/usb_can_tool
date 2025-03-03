@@ -63,12 +63,11 @@ impl CanApp {
         &self,
         dev_type: u32,
         dev_index: u32,
-        can_channel: u32,
-        baud_rate: VciCanBaudRate,
+        can_channels: &[(u32, VciCanBaudRate)], // 接收多個通道與波特率
         log_tx: Sender<String>,
     ) -> bool {
         unsafe {
-            // 1. **開啟裝置**
+            // **1. 開啟裝置**
             let status = (self.can_lib.vci_open_device)(dev_type, dev_index, 0);
             if status != 1 {
                 let _ = log_tx.send(format!("裝置打開失敗, 錯誤碼: {}", status));
@@ -76,46 +75,52 @@ impl CanApp {
             }
             let _ = log_tx.send("裝置打開成功".to_string());
 
-            let (timing0, timing1) = baud_rate.to_timing_values();
+            // **2. 初始化每個 CAN 通道**
+            for &(can_channel, baud_rate) in can_channels {
+                let (timing0, timing1) = baud_rate.to_timing_values();
+                let config = VciInitConfig {
+                    acc_code: 0,
+                    acc_mask: 0xFFFFFFFF,
+                    reserved: 0,
+                    filter: 1,
+                    timing0,
+                    timing1,
+                    mode: 0,
+                };
 
-            // 2. **初始化 CAN**
-            let config = VciInitConfig {
-                acc_code: 0,
-                acc_mask: 0xFFFFFFFF,
-                reserved: 0,
-                filter: 1,
-                timing0,
-                timing1,
-                mode: 0,
-            };
-            let init_status =
-                (self.can_lib.vci_init_can)(dev_type, dev_index, can_channel, &config);
-            if init_status != 1 {
-                let err_msg = "初始化 CAN 失敗".to_string();
-                let _ = log_tx.send(err_msg);
-                self.is_can_initialized.store(false, Ordering::SeqCst);
-                return false;
+                let init_status =
+                    (self.can_lib.vci_init_can)(dev_type, dev_index, can_channel, &config);
+                if init_status != 1 {
+                    let _ = log_tx.send(format!("CAN 通道 {} 初始化失敗", can_channel));
+
+                    // **如果有任一通道初始化失敗，關閉所有已開啟的通道**
+                    self.close_device(dev_type, dev_index, log_tx.clone());
+                    return false;
+                }
+                let _ = log_tx.send(format!(
+                    "CAN 通道 {} 初始化成功 (BaudRate: {:?})",
+                    can_channel, baud_rate
+                ));
             }
-            let _ = log_tx.send("CAN 初始化成功".to_string());
+
             self.is_can_initialized.store(true, Ordering::SeqCst);
 
-            // 3. **讀取板卡資訊**
+            // **3. 讀取板卡資訊**
             let mut board_info = VciBoardInfo::default();
             let board_status =
                 (self.can_lib.vci_read_board_info)(dev_type, dev_index, &mut board_info);
             if board_status != 1 {
-                let err_msg = "讀取板卡資訊失敗".to_string();
-                let _ = log_tx.send(err_msg);
+                let _ = log_tx.send("讀取板卡資訊失敗".to_string());
                 return false;
             }
+
             let serial_number = String::from_utf8_lossy(&board_info.str_serial_num)
                 .trim_matches('\0')
                 .to_string();
-            let board_msg = format!(
+            let _ = log_tx.send(format!(
                 "板卡資訊: Serial={}, Firmware={}",
                 serial_number, board_info.fw_version
-            );
-            let _ = log_tx.send(board_msg);
+            ));
 
             true
         }
@@ -175,58 +180,6 @@ impl CanApp {
 
     pub fn stop_receiving(&self) {
         self.receiving.store(false, Ordering::SeqCst);
-    }
-
-    pub fn reconnect_device(
-        &self,
-        dev_type: u32,
-        dev_index: u32,
-        can_channel: u32,
-        baud_rate: VciCanBaudRate,
-        log_tx: Sender<String>,
-    ) {
-        let _ = log_tx.send("開始重設波特率...".to_string());
-
-        // 1. **關閉裝置**
-        self.close_device(dev_type, dev_index, log_tx.clone());
-        thread::sleep(Duration::from_millis(100));
-
-        // 2. **重新開啟裝置**
-        if !self.open_device(dev_type, dev_index, can_channel, baud_rate, log_tx.clone()) {
-            let _ = log_tx.send("重設波特率失敗: 無法重新開啟裝置".to_string());
-            return;
-        }
-
-        let (timing0, timing1) = baud_rate.to_timing_values();
-
-        // 3. **設定新波特率**
-        let config = VciInitConfig {
-            acc_code: 0,
-            acc_mask: 0xFFFFFFFF,
-            reserved: 0,
-            filter: 1,
-            timing0,
-            timing1,
-            mode: 0,
-        };
-
-        unsafe {
-            let init_status =
-                (self.can_lib.vci_init_can)(dev_type, dev_index, can_channel, &config);
-            if init_status != 1 {
-                let _ = log_tx.send("重設波特率失敗: CAN 初始化失敗".to_string());
-                return;
-            }
-            let _ = log_tx.send(format!(
-                "波特率已更新: timing0=0x{:X}, timing1=0x{:X}",
-                timing0, timing1
-            ));
-        }
-
-        // 4. **讀取板卡資訊**
-        self.read_board_info(dev_type, dev_index, log_tx.clone());
-
-        let _ = log_tx.send("裝置重設成功".to_string());
     }
 
     pub fn read_board_info(&self, dev_type: u32, dev_index: u32, log_tx: Sender<String>) {
@@ -457,42 +410,6 @@ impl PcanApp {
     /// 停止接收
     pub fn stop_receiving(&self) {
         self.receiving.store(false, Ordering::SeqCst);
-    }
-
-    /// 重設設備（修改波特率）
-    /// 對 PCAN，須透過重新呼叫 CAN_Initialize 來變更波特率
-    pub fn reconnect_device(
-        &self,
-        _dev_type: u32,
-        _dev_index: u32,
-        channel: u32,
-        baud_rate: PcanBaudRate,
-        log_tx: Sender<String>,
-    ) {
-        let _ = log_tx.send("Starting PCAN reconnection...".to_string());
-        self.close_device(0, 0, channel, log_tx.clone());
-        thread::sleep(Duration::from_millis(100));
-
-        if !self.open_device(0, 0, channel, baud_rate, log_tx.clone()) {
-            let _ = log_tx.send("PCAN reconnection failed: unable to reopen device".to_string());
-            return;
-        }
-
-        let baudrate_value = baud_rate.to_u16();
-
-        unsafe {
-            // 再次呼叫 CAN_Initialize 傳入新波特率
-            let status = (self.can_lib.can_initialize)(channel, baudrate_value as u32, 0, 0, 0);
-            if status != PCAN_ERROR_OK {
-                let _ = log_tx.send("PCAN reconnection failed: reinitialization error".to_string());
-                return;
-            }
-            let _ = log_tx.send(format!(
-                "PCAN baudrate updated: new baudrate value: 0x{:X}",
-                baudrate_value
-            ));
-        }
-        let _ = log_tx.send("PCAN device reconnected successfully".to_string());
     }
 
     /// 讀取板卡資訊

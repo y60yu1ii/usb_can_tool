@@ -22,20 +22,18 @@ fn main() {
 
     let baud_rate = if args.len() > 2 {
         match args[2].parse::<u32>() {
-            Ok(value) => {
-                match api {
-                    CanApi::ControlCan => CanBaudRate::ControlCan(
-                        VciCanBaudRate::from_u32(value).unwrap_or(VciCanBaudRate::Kbps250),
-                    ), // 預設 250Kbps
-                    CanApi::Pcan => CanBaudRate::Pcan(
-                        PcanBaudRate::from_u32(value).unwrap_or(PcanBaudRate::Baud250K),
-                    ), // 預設 250Kbps
-                }
-            }
+            Ok(value) => match api {
+                CanApi::ControlCan => CanBaudRate::ControlCan(
+                    VciCanBaudRate::from_u32(value).unwrap_or(VciCanBaudRate::Baud250K),
+                ),
+                CanApi::Pcan => CanBaudRate::Pcan(
+                    PcanBaudRate::from_u32(value).unwrap_or(PcanBaudRate::Baud250K),
+                ),
+            },
             Err(_) => {
                 eprintln!("無效的波特率: {}，使用預設值 250Kbps", args[2]);
                 match api {
-                    CanApi::ControlCan => CanBaudRate::ControlCan(VciCanBaudRate::Kbps250),
+                    CanApi::ControlCan => CanBaudRate::ControlCan(VciCanBaudRate::Baud250K),
                     CanApi::Pcan => CanBaudRate::Pcan(PcanBaudRate::Baud250K),
                 }
             }
@@ -43,7 +41,7 @@ fn main() {
     } else {
         println!("未指定波特率，使用預設 250Kbps");
         match api {
-            CanApi::ControlCan => CanBaudRate::ControlCan(VciCanBaudRate::Kbps250),
+            CanApi::ControlCan => CanBaudRate::ControlCan(VciCanBaudRate::Baud250K),
             CanApi::Pcan => CanBaudRate::Pcan(PcanBaudRate::Baud250K),
         }
     };
@@ -69,26 +67,52 @@ fn main() {
     match api {
         CanApi::ControlCan => {
             println!("Using ControlCAN API");
-            let can_channel: u32 = 0; //for canalyst II
             let can_app = CanApp::new();
-            if let CanBaudRate::ControlCan(baud) = baud_rate {
-                if !can_app.open_device(dev_type, dev_index, can_channel, baud, log_tx.clone()) {
-                    eprintln!("ControlCAN open device failed");
-                    return;
+
+            let mut can_channels = Vec::new();
+
+            for arg in args.iter().skip(2) {
+                // 跳過前 2 個參數 (`controlcan`)
+                if let Some((ch, br)) = arg.split_once(':') {
+                    if let (Ok(channel), Ok(baud)) = (ch.parse::<u32>(), br.parse::<u32>()) {
+                        if let Some(valid_baud) = VciCanBaudRate::from_u32(baud) {
+                            can_channels.push((channel, valid_baud));
+                        } else {
+                            eprintln!("無效的波特率: {} (通道: {})，跳過...", baud, channel);
+                        }
+                    } else {
+                        eprintln!("無效的通道或波特率格式: {}，跳過...", arg);
+                    }
                 }
             }
-            can_app.start_receiving(
-                dev_type,
-                dev_index,
-                can_channel,
-                log_tx.clone(),
-                data_tx.clone(),
-            );
-            //turned off after 10 seconds
+
+            if can_channels.is_empty() {
+                println!("未指定通道，預設使用 CAN 通道 0 (250Kbps)");
+                can_channels.push((0, VciCanBaudRate::Baud250K));
+                can_channels.push((1, VciCanBaudRate::Baud1M));
+            }
+
+            if !can_app.open_device(dev_type, dev_index, &can_channels, log_tx.clone()) {
+                eprintln!("ControlCAN open device failed");
+                return;
+            }
+
+            for &(channel, _) in &can_channels {
+                can_app.start_receiving(
+                    dev_type,
+                    dev_index,
+                    channel,
+                    log_tx.clone(),
+                    data_tx.clone(),
+                );
+            }
+
             thread::sleep(Duration::from_secs(10));
+
             can_app.stop_receiving();
             can_app.close_device(dev_type, dev_index, log_tx.clone());
         }
+
         CanApi::Pcan => {
             println!("Using PCANBasic API");
             let channel: u32 = 0x51; //for pcan
