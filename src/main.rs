@@ -66,8 +66,9 @@ fn main() {
     });
 
     let data_rx_clone = Arc::clone(&data_rx);
-    thread::spawn(move || {
-        while let Ok(data) = data_rx_clone.lock().unwrap().recv() {
+    thread::spawn(move || loop {
+        let data_rx_lock = data_rx_clone.lock().unwrap();
+        if let Ok(data) = data_rx_lock.recv() {
             println!("[DATA] {}", data);
         }
     });
