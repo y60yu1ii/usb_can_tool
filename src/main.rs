@@ -4,8 +4,8 @@ use crate::can::cantypes::*;
 
 use flume::unbounded;
 use std::env;
+use std::sync::{Arc, Mutex};
 use std::{thread, time::Duration};
-
 enum CanApi {
     ControlCan,
     Pcan,
@@ -57,14 +57,17 @@ fn main() {
     let (log_tx, log_rx) = unbounded();
     let (data_tx, data_rx) = unbounded();
 
+    let data_rx = Arc::new(Mutex::new(data_rx));
+
     thread::spawn(move || {
         while let Ok(msg) = log_rx.recv() {
             println!("[LOG] {}", msg);
         }
     });
 
+    let data_rx_clone = Arc::clone(&data_rx);
     thread::spawn(move || {
-        while let Ok(data) = data_rx.recv() {
+        while let Ok(data) = data_rx_clone.lock().unwrap().recv() {
             println!("[DATA] {}", data);
         }
     });
@@ -80,7 +83,6 @@ fn main() {
             let mut can_channels = Vec::new();
 
             for arg in args.iter().skip(2) {
-                // 跳過前 2 個參數 (`controlcan`)
                 if let Some((ch, br)) = arg.split_once(':') {
                     if let (Ok(channel), Ok(baud)) = (ch.parse::<u32>(), br.parse::<u32>()) {
                         if let Some(valid_baud) = VciCanBaudRate::from_u32(baud) {
@@ -105,15 +107,14 @@ fn main() {
                 return;
             }
 
-            for &(channel, _) in &can_channels {
-                can_app.start_receiving(
-                    dev_type,
-                    dev_index,
-                    channel,
-                    log_tx.clone(),
-                    data_tx.clone(),
-                );
-            }
+            thread::spawn(move || {
+                loop {
+                    let data_rx_lock = data_rx.lock().unwrap(); // 🔹 確保獨占訪問
+                    if let Ok(data) = data_rx_lock.recv() {
+                        println!("[DATA] {}", data);
+                    }
+                }
+            });
 
             thread::sleep(Duration::from_secs(10));
 

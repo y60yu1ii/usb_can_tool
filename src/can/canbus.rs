@@ -138,44 +138,40 @@ impl CanApp {
         &self,
         dev_type: u32,
         dev_index: u32,
-        can_channel: u32,
+        can_channels: &[u32],
         log_tx: Sender<String>,
         data_tx: Sender<String>,
     ) {
         let receiving_flag = Arc::clone(&self.receiving);
         let can_lib = Arc::clone(&self.can_lib);
 
-        unsafe {
-            let start_status = (can_lib.vci_start_can)(dev_type, dev_index, can_channel);
-            if start_status != 1 {
-                let err_msg = format!(
-                    "無法啟動 CAN 通道 {}, 錯誤碼: {}",
-                    can_channel, start_status
-                );
-                let _ = log_tx.send(err_msg);
-                return;
-            }
-            let _ = log_tx.send(format!("CAN 通道 {} 啟動成功", can_channel));
-        }
+        for &channel in can_channels {
+            let log_tx = log_tx.clone();
+            let data_tx = data_tx.clone();
+            let receiving_flag = Arc::clone(&receiving_flag);
+            let can_lib = Arc::clone(&can_lib);
 
-        receiving_flag.store(true, Ordering::SeqCst);
+            thread::spawn(move || {
+                let _ = log_tx.send(format!("CAN 通道 {} 開始接收數據", channel));
 
-        thread::spawn(move || {
-            while receiving_flag.load(Ordering::SeqCst) {
-                let mut can_obj = VciCanObj::default();
-                let received_frames = unsafe {
-                    (can_lib.vci_receive)(dev_type, dev_index, can_channel, &mut can_obj, 1, 500)
-                };
+                while receiving_flag.load(Ordering::SeqCst) {
+                    let mut can_obj = VciCanObj::default();
+                    let received_frames = unsafe {
+                        (can_lib.vci_receive)(dev_type, dev_index, channel, &mut can_obj, 1, 500)
+                    };
 
-                if received_frames > 0 {
-                    let data = &can_obj.data[..(can_obj.data_len as usize)];
-                    let msg = format!("ID=0x{:X}, Data={:?}", can_obj.id, data);
-                    let _ = data_tx.send(msg);
+                    if received_frames > 0 {
+                        let data = &can_obj.data[..(can_obj.data_len as usize)];
+                        let msg = format!("{}| ID=0x{:X}, Data={:?}", channel, can_obj.id, data);
+                        let _ = data_tx.send(msg);
+                    }
+
+                    thread::sleep(Duration::from_millis(10));
                 }
 
-                thread::sleep(Duration::from_millis(10));
-            }
-        });
+                let _ = log_tx.send(format!("CAN 通道 {} 停止接收數據", channel));
+            });
+        }
     }
 
     pub fn stop_receiving(&self) {
