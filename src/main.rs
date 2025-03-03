@@ -41,11 +41,11 @@ fn main() {
     // 假設參數，dev_type = 4, dev_index = 0, 通道 = 0
     let dev_type: u32 = 4;
     let dev_index: u32 = 0;
-    let channel: u32 = 0;
 
     match api {
         CanApi::ControlCan => {
             println!("Using ControlCAN API");
+            let channel: u32 = 0; //for canalyst II
             let can_app = CanApp::new();
             if !can_app.open_device(dev_type, dev_index, channel, log_tx.clone()) {
                 eprintln!("ControlCAN open device failed");
@@ -64,6 +64,7 @@ fn main() {
         }
         CanApi::Pcan => {
             println!("Using PCANBasic API");
+            let channel: u32 = 0x51; //for pcan
             let can_app = PcanApp::new();
             if !can_app.open_device(dev_type, dev_index, channel, log_tx.clone()) {
                 eprintln!("PCAN open device failed");

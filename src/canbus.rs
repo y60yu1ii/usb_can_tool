@@ -365,6 +365,7 @@ pub struct PcanLibrary {
     pub can_read: unsafe extern "C" fn(u32, *mut PcanMsg) -> u32,
     pub can_write: unsafe extern "C" fn(u32, *const PcanMsg) -> u32,
     pub can_get_value: unsafe extern "C" fn(u32, u32, *mut c_void, u32) -> u32,
+    pub can_set_value: unsafe extern "C" fn(u32, u32, *const c_void, u32) -> u32, // <-- 新增這行
 }
 
 impl PcanLibrary {
@@ -384,6 +385,9 @@ impl PcanLibrary {
                 can_get_value: *lib
                     .get(b"CAN_GetValue\0")
                     .expect("Failed to get CAN_GetValue"),
+                can_set_value: *lib
+                    .get(b"CAN_SetValue\0") // <-- 新增這行
+                    .expect("Failed to get CAN_SetValue"),
             })
         }
     }
@@ -406,9 +410,6 @@ impl PcanApp {
         }
     }
 
-    /// 開啟裝置並初始化 PCAN 通道
-    /// 對 PCAN，此處 dev_type 與 dev_index 不使用，上層可傳 0，
-    /// channel 為 PCAN 預設通道號 (例如 PCANBasic 定義 PCAN_USBBUS1 為 0x51)
     pub fn open_device(
         &self,
         _dev_type: u32,
@@ -416,42 +417,76 @@ impl PcanApp {
         channel: u32,
         log_tx: Sender<String>,
     ) -> bool {
+        // **先確保 PCAN 通道已釋放**
+        self.force_close(log_tx.clone());
+
         unsafe {
-            // 使用 CAN_Initialize 開啟與初始化裝置
-            // 參數依 PCANBasic 說明：Channel, Baudrate, HwType, IOPort, Interrupt
-            let baudrate = 0x0014; // 例如 0x0014 代表 500 kbps (請依實際定義調整)
+            // **開始初始化 PCAN**
+            let baudrate = 0x011C; // 250 kbps
             let status = (self.can_lib.can_initialize)(channel, baudrate, 0, 0, 0);
             if status != PCAN_ERROR_OK {
                 let _ = log_tx.send(format!(
-                    "PCAN device initialization failed, error code: {}",
+                    "PCAN device initialization failed, error code: 0x{:X}",
                     status
                 ));
                 return false;
             }
-            let _ = log_tx.send("PCAN device initialized successfully".to_string());
+            let _ = log_tx.send("PCAN device initialized successfully.".to_string());
             self.is_can_initialized.store(true, Ordering::SeqCst);
 
-            // 讀取板卡資訊（若有需要，可透過 CAN_GetValue 取得，此處簡化處理）
-            let mut board_info = PcanBoardInfo::default();
-            // 例如使用 PCAN_PARAMETER_API_VERSION (參數值 0x00000005) 讀取 API 版本
-            const PCAN_PARAMETER_API_VERSION: u32 = 0x00000005;
-            let mut buffer = [0u8; 24];
-            let info_status = (self.can_lib.can_get_value)(
-                channel,
-                PCAN_PARAMETER_API_VERSION,
-                buffer.as_mut_ptr() as *mut c_void,
-                24,
-            );
-            if info_status == PCAN_ERROR_OK {
-                let version = String::from_utf8_lossy(&buffer)
-                    .trim_matches('\0')
-                    .to_string();
-                let _ = log_tx.send(format!("PCAN API Version: {}", version));
-            } else {
-                let _ = log_tx.send("PCAN board info not available".to_string());
-            }
+            // **設置 CAN 設備參數**
+            self.configure_pcan(channel, log_tx.clone());
 
             true
+        }
+    }
+
+    fn configure_pcan(&self, channel: u32, log_tx: Sender<String>) {
+        unsafe {
+            // **啟用接收所有 CAN 訊息**
+            const PCAN_MESSAGE_FILTER: u32 = 0x04;
+            const PCAN_FILTER_OPEN: u32 = 1;
+            let filter_status = (self.can_lib.can_set_value)(
+                channel,
+                PCAN_MESSAGE_FILTER,
+                &PCAN_FILTER_OPEN as *const _ as *mut c_void,
+                4,
+            );
+            if filter_status != PCAN_ERROR_OK {
+                let _ = log_tx.send("Failed to enable message filter.".to_string());
+            } else {
+                let _ = log_tx.send("PCAN message filter enabled.".to_string());
+            }
+
+            // **確保 PCAN 不在 Listen-Only 模式**
+            const PCAN_LISTEN_ONLY: u32 = 0x08;
+            const PCAN_PARAMETER_OFF: u32 = 0;
+            let listen_status = (self.can_lib.can_set_value)(
+                channel,
+                PCAN_LISTEN_ONLY,
+                &PCAN_PARAMETER_OFF as *const _ as *mut c_void,
+                4,
+            );
+            if listen_status != PCAN_ERROR_OK {
+                let _ = log_tx.send("Failed to disable listen-only mode.".to_string());
+            } else {
+                let _ = log_tx.send("PCAN listen-only mode disabled.".to_string());
+            }
+
+            // **啟用 Bus-Off 自動重置**
+            const PCAN_BUSOFF_AUTORESET: u32 = 0x07;
+            const PCAN_PARAMETER_ON: u32 = 1;
+            let reset_status = (self.can_lib.can_set_value)(
+                channel,
+                PCAN_BUSOFF_AUTORESET,
+                &PCAN_PARAMETER_ON as *const _ as *mut c_void,
+                4,
+            );
+            if reset_status != PCAN_ERROR_OK {
+                let _ = log_tx.send("Failed to enable Bus-Off auto-reset.".to_string());
+            } else {
+                let _ = log_tx.send("Bus-Off auto-reset enabled.".to_string());
+            }
         }
     }
 
@@ -467,6 +502,18 @@ impl PcanApp {
             let status = (self.can_lib.can_uninitialize)(channel);
             let _ = log_tx.send(format!("PCAN device closed, status: {}", status));
             self.is_can_initialized.store(false, Ordering::SeqCst);
+        }
+    }
+
+    pub fn force_close(&self, log_tx: Sender<String>) {
+        const PCAN_NONEBUS: u32 = 0x00;
+        unsafe {
+            let status = (self.can_lib.can_uninitialize)(PCAN_NONEBUS);
+            if status == PCAN_ERROR_OK {
+                let _ = log_tx.send("All PCAN channels uninitialized successfully".to_string());
+            } else {
+                let _ = log_tx.send("Failed to uninitialize all PCAN channels".to_string());
+            }
         }
     }
 
