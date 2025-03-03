@@ -167,3 +167,55 @@ impl Default for PcanBoardInfo {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub enum PcanBaudRate {
+    Baud1M = 0x0014,
+    Baud800K = 0x0016,
+    Baud500K = 0x001C,
+    Baud250K = 0x011C,
+    Baud125K = 0x031C,
+    Baud100K = 0x432F,
+    Baud95K = 0xC34E,
+    Baud83K = 0x852B,
+    Baud50K = 0x472F,
+    Baud47K = 0x1414,
+    Baud33K = 0x8B2F,
+    Baud20K = 0x532F,
+    Baud10K = 0x672F,
+    Baud5K = 0x7F7F,
+}
+
+impl PcanBaudRate {
+    /// **將 `PcanBaudRate` 轉換成 `u16` (適用於 PCAN API)**
+    pub fn to_u16(self) -> u16 {
+        self as u16
+    }
+
+    /// **從 `u32` 轉換成 `PcanBaudRate` (用戶輸入數字)**
+    pub fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            1000 => Some(PcanBaudRate::Baud1M),
+            800 => Some(PcanBaudRate::Baud800K),
+            500 => Some(PcanBaudRate::Baud500K),
+            250 => Some(PcanBaudRate::Baud250K),
+            125 => Some(PcanBaudRate::Baud125K),
+            100 => Some(PcanBaudRate::Baud100K),
+            95 => Some(PcanBaudRate::Baud95K),
+            83 => Some(PcanBaudRate::Baud83K),
+            50 => Some(PcanBaudRate::Baud50K),
+            47 => Some(PcanBaudRate::Baud47K),
+            33 => Some(PcanBaudRate::Baud33K),
+            20 => Some(PcanBaudRate::Baud20K),
+            10 => Some(PcanBaudRate::Baud10K),
+            5 => Some(PcanBaudRate::Baud5K),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CanBaudRate {
+    ControlCan(VciCanBaudRate),
+    Pcan(PcanBaudRate),
+}

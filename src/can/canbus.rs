@@ -316,15 +316,18 @@ impl PcanApp {
         _dev_type: u32,
         _dev_index: u32,
         channel: u32,
+        baud_rate: PcanBaudRate, // 使用者選擇的 PCAN 波特率
         log_tx: Sender<String>,
     ) -> bool {
         // **先確保 PCAN 通道已釋放**
         self.force_close(log_tx.clone());
 
         unsafe {
+            // **轉換波特率為 PCAN API 格式**
+            let baudrate_value = baud_rate.to_u16();
+
             // **開始初始化 PCAN**
-            let baudrate = 0x011C; // 250 kbps
-            let status = (self.can_lib.can_initialize)(channel, baudrate, 0, 0, 0);
+            let status = (self.can_lib.can_initialize)(channel, baudrate_value as u32, 0, 0, 0);
             if status != PCAN_ERROR_OK {
                 let _ = log_tx.send(format!(
                     "PCAN device initialization failed, error code: 0x{:X}",
@@ -332,7 +335,11 @@ impl PcanApp {
                 ));
                 return false;
             }
-            let _ = log_tx.send("PCAN device initialized successfully.".to_string());
+
+            let _ = log_tx.send(format!(
+                "PCAN device initialized successfully with baud rate: {:?} (0x{:X})",
+                baud_rate, baudrate_value
+            ));
             self.is_can_initialized.store(true, Ordering::SeqCst);
 
             // **設置 CAN 設備參數**
@@ -459,26 +466,30 @@ impl PcanApp {
         _dev_type: u32,
         _dev_index: u32,
         channel: u32,
-        new_baudrate: u32,
+        baud_rate: PcanBaudRate,
         log_tx: Sender<String>,
     ) {
         let _ = log_tx.send("Starting PCAN reconnection...".to_string());
         self.close_device(0, 0, channel, log_tx.clone());
         thread::sleep(Duration::from_millis(100));
-        if !self.open_device(0, 0, channel, log_tx.clone()) {
+
+        if !self.open_device(0, 0, channel, baud_rate, log_tx.clone()) {
             let _ = log_tx.send("PCAN reconnection failed: unable to reopen device".to_string());
             return;
         }
+
+        let baudrate_value = baud_rate.to_u16();
+
         unsafe {
             // 再次呼叫 CAN_Initialize 傳入新波特率
-            let status = (self.can_lib.can_initialize)(channel, new_baudrate, 0, 0, 0);
+            let status = (self.can_lib.can_initialize)(channel, baudrate_value as u32, 0, 0, 0);
             if status != PCAN_ERROR_OK {
                 let _ = log_tx.send("PCAN reconnection failed: reinitialization error".to_string());
                 return;
             }
             let _ = log_tx.send(format!(
                 "PCAN baudrate updated: new baudrate value: 0x{:X}",
-                new_baudrate
+                baudrate_value
             ));
         }
         let _ = log_tx.send("PCAN device reconnected successfully".to_string());
