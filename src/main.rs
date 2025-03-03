@@ -1,6 +1,7 @@
-mod canbus; // 假設 canbus.rs 中同時定義了 CanApp (ControlCAN) 與 PcanApp (PCANBasic)
+mod canbus;
+mod cantypes;
+use crate::canbus::{CanApp, PcanApp};
 
-use canbus::{CanApp, PcanApp};
 use flume::unbounded;
 use std::env;
 use std::{thread, time::Duration};
