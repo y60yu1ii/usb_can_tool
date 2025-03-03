@@ -217,7 +217,7 @@ pub struct PcanLibrary {
     pub can_initialize: unsafe extern "C" fn(u32, u32, u32, u32, u32) -> u32,
     pub can_uninitialize: unsafe extern "C" fn(u32) -> u32,
     pub can_read: unsafe extern "C" fn(u32, *mut PcanMsg) -> u32,
-    pub can_write: unsafe extern "C" fn(u32, *const PcanMsg) -> u32,
+    // pub can_write: unsafe extern "C" fn(u32, *const PcanMsg) -> u32,
     pub can_get_value: unsafe extern "C" fn(u32, u32, *mut c_void, u32) -> u32,
     pub can_set_value: unsafe extern "C" fn(u32, u32, *const c_void, u32) -> u32, // <-- 新增這行
 }
@@ -235,7 +235,7 @@ impl PcanLibrary {
                     .get(b"CAN_Uninitialize\0")
                     .expect("Failed to get CAN_Uninitialize"),
                 can_read: *lib.get(b"CAN_Read\0").expect("Failed to get CAN_Read"),
-                can_write: *lib.get(b"CAN_Write\0").expect("Failed to get CAN_Write"),
+                // can_write: *lib.get(b"CAN_Write\0").expect("Failed to get CAN_Write"),
                 can_get_value: *lib
                     .get(b"CAN_GetValue\0")
                     .expect("Failed to get CAN_GetValue"),
