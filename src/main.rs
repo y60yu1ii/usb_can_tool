@@ -1,18 +1,17 @@
 mod can;
 use crate::can::canbus::*;
+use crate::can::cantypes::*;
 
 use flume::unbounded;
 use std::env;
 use std::{thread, time::Duration};
 
-/// 定義可選 API 枚舉
 enum CanApi {
     ControlCan,
     Pcan,
 }
 
 fn main() {
-    // 根據命令行參數決定使用哪一個 API，若參數為 "pcan" 則使用 PCANBasic，其餘則預設使用 ControlCAN
     let args: Vec<String> = env::args().collect();
     let api = if args.len() > 1 && args[1].to_lowercase() == "pcan" {
         CanApi::Pcan
@@ -20,7 +19,19 @@ fn main() {
         CanApi::ControlCan
     };
 
-    // 建立 log 與 data 通道
+    let baud_rate = if args.len() > 2 {
+        match args[2].parse::<u32>() {
+            Ok(value) => VciCanBaudRate::from_u32(value).unwrap_or(VciCanBaudRate::Kbps250), // 預設 250Kbps
+            Err(_) => {
+                eprintln!("無效的波特率: {}，使用預設值 250Kbps", args[2]);
+                VciCanBaudRate::Kbps250
+            }
+        }
+    } else {
+        println!("未指定波特率，使用預設 250Kbps");
+        VciCanBaudRate::Kbps250
+    };
+
     let (log_tx, log_rx) = unbounded();
     let (data_tx, data_rx) = unbounded();
 
@@ -45,19 +56,20 @@ fn main() {
     match api {
         CanApi::ControlCan => {
             println!("Using ControlCAN API");
-            let channel: u32 = 0; //for canalyst II
+            let can_channel: u32 = 0; //for canalyst II
             let can_app = CanApp::new();
-            if !can_app.open_device(dev_type, dev_index, channel, log_tx.clone()) {
+            if !can_app.open_device(dev_type, dev_index, can_channel, baud_rate, log_tx.clone()) {
                 eprintln!("ControlCAN open device failed");
                 return;
             }
             can_app.start_receiving(
                 dev_type,
                 dev_index,
-                channel,
+                can_channel,
                 log_tx.clone(),
                 data_tx.clone(),
             );
+            //turned off after 10 seconds
             thread::sleep(Duration::from_secs(10));
             can_app.stop_receiving();
             can_app.close_device(dev_type, dev_index, log_tx.clone());
@@ -77,6 +89,7 @@ fn main() {
                 log_tx.clone(),
                 data_tx.clone(),
             );
+            //turned off after 10 seconds
             thread::sleep(Duration::from_secs(10));
             can_app.stop_receiving();
             can_app.close_device(dev_type, dev_index, channel, log_tx.clone());

@@ -64,6 +64,7 @@ impl CanApp {
         dev_type: u32,
         dev_index: u32,
         can_channel: u32,
+        baud_rate: CanBaudRate
         log_tx: Sender<String>,
     ) -> bool {
         unsafe {
@@ -75,14 +76,16 @@ impl CanApp {
             }
             let _ = log_tx.send("裝置打開成功".to_string());
 
+             let (timing0, timing1) = baud_rate.to_timing_values();
+
             // 2. **初始化 CAN**
             let config = VciInitConfig {
                 acc_code: 0,
                 acc_mask: 0xFFFFFFFF,
                 reserved: 0,
                 filter: 1,
-                timing0: 0x01, // 預設 250kbps，你可以改為對應的值
-                timing1: 0x1C,
+                timing0,
+                timing1,
                 mode: 0,
             };
             let init_status =
