@@ -64,7 +64,7 @@ impl CanApp {
         dev_type: u32,
         dev_index: u32,
         can_channel: u32,
-        baud_rate: CanBaudRate
+        baud_rate: VciCanBaudRate,
         log_tx: Sender<String>,
     ) -> bool {
         unsafe {
@@ -76,7 +76,7 @@ impl CanApp {
             }
             let _ = log_tx.send("裝置打開成功".to_string());
 
-             let (timing0, timing1) = baud_rate.to_timing_values();
+            let (timing0, timing1) = baud_rate.to_timing_values();
 
             // 2. **初始化 CAN**
             let config = VciInitConfig {
@@ -182,8 +182,7 @@ impl CanApp {
         dev_type: u32,
         dev_index: u32,
         can_channel: u32,
-        timing0: u8,
-        timing1: u8,
+        baud_rate: VciCanBaudRate,
         log_tx: Sender<String>,
     ) {
         let _ = log_tx.send("開始重設波特率...".to_string());
@@ -193,10 +192,12 @@ impl CanApp {
         thread::sleep(Duration::from_millis(100));
 
         // 2. **重新開啟裝置**
-        if !self.open_device(dev_type, dev_index, can_channel, log_tx.clone()) {
+        if !self.open_device(dev_type, dev_index, can_channel, baud_rate, log_tx.clone()) {
             let _ = log_tx.send("重設波特率失敗: 無法重新開啟裝置".to_string());
             return;
         }
+
+        let (timing0, timing1) = baud_rate.to_timing_values();
 
         // 3. **設定新波特率**
         let config = VciInitConfig {
