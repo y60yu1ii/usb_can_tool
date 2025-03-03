@@ -46,6 +46,14 @@ fn main() {
         }
     };
 
+    match baud_rate {
+        CanBaudRate::ControlCan(baud) => {
+            println!("開啟 ControlCAN，波特率為 {:?}", baud);
+        }
+        CanBaudRate::Pcan(baud) => {
+            println!("開啟 PCAN，波特率為 {:?}", baud);
+        }
+    }
     let (log_tx, log_rx) = unbounded();
     let (data_tx, data_rx) = unbounded();
 

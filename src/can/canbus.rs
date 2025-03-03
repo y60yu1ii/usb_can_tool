@@ -181,7 +181,7 @@ impl CanApp {
     pub fn stop_receiving(&self) {
         self.receiving.store(false, Ordering::SeqCst);
     }
-
+    #[allow(dead_code)]
     pub fn read_board_info(&self, dev_type: u32, dev_index: u32, log_tx: Sender<String>) {
         if !self.is_can_initialized.load(Ordering::SeqCst) {
             let _ = log_tx.send("錯誤: CAN 尚未初始化，無法讀取板卡資訊".to_string());
@@ -412,7 +412,7 @@ impl PcanApp {
         self.receiving.store(false, Ordering::SeqCst);
     }
 
-    /// 讀取板卡資訊
+    #[allow(dead_code)]
     pub fn read_board_info(
         &self,
         _dev_type: u32,
