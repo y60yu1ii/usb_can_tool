@@ -24,7 +24,9 @@ struct CanGui {
     controlcan_ch2: u32,
     controlcan_baud2: u32,
     pcan_baud: u32,
-    received_data: Arc<Mutex<String>>,
+    // received_data: Arc<Mutex<String>>,
+    is_receiving: Arc<Mutex<bool>>,
+    can_app: Arc<Mutex<Option<CanApp>>>,
 }
 
 impl Default for CanGui {
@@ -36,7 +38,9 @@ impl Default for CanGui {
             controlcan_ch2: 1,
             controlcan_baud2: 1000,
             pcan_baud: 250,
-            received_data: Arc::new(Mutex::new(String::new())),
+            // received_data: Arc::new(Mutex::new(String::new())),
+            is_receiving: Arc::new(Mutex::new(false)),
+            can_app: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -46,7 +50,15 @@ impl CanGui {
         let (log_tx, log_rx) = unbounded();
         let (data_tx, data_rx) = unbounded();
         let data_rx = Arc::new(Mutex::new(data_rx));
-        let received_data_clone = Arc::clone(&self.received_data);
+        let is_receiving_clone = Arc::clone(&self.is_receiving);
+        let can_app_clone = Arc::clone(&self.can_app);
+
+        // let received_data_clone = Arc::clone(&self.received_data);
+
+        {
+            let mut receiving = is_receiving_clone.lock().unwrap();
+            *receiving = true;
+        }
 
         let dev_type: u32 = 4;
         let dev_index: u32 = 0;
@@ -57,12 +69,23 @@ impl CanGui {
             }
         });
 
-        thread::spawn(move || {
-            while let Ok(data) = data_rx.lock().unwrap().recv() {
-                let mut received_data = received_data_clone.lock().unwrap();
-                *received_data = format!("{}\n{}", *received_data, data);
+        let data_rx_clone = Arc::clone(&data_rx);
+        thread::spawn(move || loop {
+            let data_rx_lock = data_rx_clone.lock().unwrap();
+            if let Ok(data) = data_rx_lock.recv() {
+                println!("[DATA] {}", data);
             }
         });
+
+        // thread::spawn(move || {
+        //     while let Ok(data) = data_rx.lock().unwrap().recv() {
+        //         let mut received_data = received_data_clone.lock().unwrap();
+        //         *received_data = format!("{}\n{}", *received_data, data);
+        //     }
+        // });
+
+        let mut can_app = can_app_clone.lock().unwrap();
+        *can_app = Some(CanApp::new());
 
         match self.api {
             CanApi::ControlCan => {
@@ -118,6 +141,15 @@ impl CanGui {
                 can_app.stop_receiving();
                 can_app.close_device(dev_type, dev_index, channel, log_tx.clone());
             }
+        }
+    }
+
+    fn stop_can(&self) {
+        let mut receiving = self.is_receiving.lock().unwrap();
+        *receiving = false;
+
+        if let Some(can_app) = &*self.can_app.lock().unwrap() {
+            can_app.stop_receiving();
         }
     }
 }
@@ -198,6 +230,10 @@ impl eframe::App for CanGui {
 
             if ui.button("Start CAN Communication").clicked() {
                 self.start_can();
+            }
+
+            if ui.button("Stop CAN Communication").clicked() {
+                self.stop_can();
             }
 
             // ui.separator();
