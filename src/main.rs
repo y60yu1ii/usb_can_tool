@@ -1,11 +1,11 @@
 mod can;
 use crate::can::canbus::*;
 use crate::can::cantypes::*;
+use std::{thread, time::Duration};
 
 use eframe::egui;
 use flume::unbounded;
 use std::sync::{Arc, Mutex};
-use std::{thread, time::Duration};
 #[derive(PartialEq)]
 enum CanApi {
     ControlCan,
@@ -24,6 +24,7 @@ struct CanGui {
     controlcan_ch2: u32,
     controlcan_baud2: u32,
     pcan_baud: u32,
+    received_data: Arc<Mutex<String>>,
 }
 
 impl Default for CanGui {
@@ -35,6 +36,7 @@ impl Default for CanGui {
             controlcan_ch2: 1,
             controlcan_baud2: 1000,
             pcan_baud: 250,
+            received_data: Arc::new(Mutex::new(String::new())),
         }
     }
 }
@@ -44,12 +46,21 @@ impl CanGui {
         let (log_tx, log_rx) = unbounded();
         let (data_tx, data_rx) = unbounded();
         let data_rx = Arc::new(Mutex::new(data_rx));
+        let received_data_clone = Arc::clone(&self.received_data);
+
         let dev_type: u32 = 4;
         let dev_index: u32 = 0;
 
         thread::spawn(move || {
             while let Ok(msg) = log_rx.recv() {
                 println!("[LOG] {}", msg);
+            }
+        });
+
+        thread::spawn(move || {
+            while let Ok(data) = data_rx.lock().unwrap().recv() {
+                let mut received_data = received_data_clone.lock().unwrap();
+                *received_data = format!("{}\n{}", *received_data, data);
             }
         });
 
@@ -122,10 +133,10 @@ fn main() -> eframe::Result<()> {
 impl eframe::App for CanGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("CAN Bus 設定");
+            ui.heading("CAN Bus Configuration");
 
             ui.horizontal(|ui| {
-                ui.label("選擇 CAN API:");
+                ui.label("Select CAN API:");
                 ui.radio_value(&mut self.api, CanApi::ControlCan, "ControlCAN");
                 ui.radio_value(&mut self.api, CanApi::Pcan, "PCAN");
             });
@@ -134,10 +145,10 @@ impl eframe::App for CanGui {
                 CanApi::ControlCan => {
                     ui.separator();
                     ui.horizontal(|ui| {
-                        ui.label("通道 1:");
+                        ui.label("Channel 1:");
                         ui.add(egui::DragValue::new(&mut self.controlcan_ch1));
-                        ui.label("波特率:");
-                        egui::ComboBox::from_label("")
+                        ui.label("Baud Rate:");
+                        egui::ComboBox::from_id_salt("baud1")
                             .selected_text(format!("{}K", self.controlcan_baud1))
                             .show_ui(ui, |ui| {
                                 for &rate in CONTROL_CAN_BAUD_RATES.iter() {
@@ -150,10 +161,10 @@ impl eframe::App for CanGui {
                             });
                     });
                     ui.horizontal(|ui| {
-                        ui.label("通道 2:");
+                        ui.label("Channel 2:");
                         ui.add(egui::DragValue::new(&mut self.controlcan_ch2));
-                        ui.label("波特率:");
-                        egui::ComboBox::from_label("")
+                        ui.label("Baud Rate:");
+                        egui::ComboBox::from_id_salt("baud2")
                             .selected_text(format!("{}K", self.controlcan_baud2))
                             .show_ui(ui, |ui| {
                                 for &rate in CONTROL_CAN_BAUD_RATES.iter() {
@@ -169,8 +180,8 @@ impl eframe::App for CanGui {
                 CanApi::Pcan => {
                     ui.separator();
                     ui.horizontal(|ui| {
-                        ui.label("PCAN 波特率:");
-                        egui::ComboBox::from_label("")
+                        ui.label("PCAN Baud Rate:");
+                        egui::ComboBox::from_id_salt("pcan_baud")
                             .selected_text(format!("{}K", self.pcan_baud))
                             .show_ui(ui, |ui| {
                                 for &rate in PCAN_BAUD_RATES.iter() {
@@ -185,9 +196,14 @@ impl eframe::App for CanGui {
                 }
             }
 
-            if ui.button("開始 CAN 通訊").clicked() {
+            if ui.button("Start CAN Communication").clicked() {
                 self.start_can();
             }
+
+            ui.separator();
+            ui.label("Received Data:");
+            let mut received_data = self.received_data.lock().unwrap();
+            ui.text_edit_multiline(&mut *received_data);
         });
     }
 }
