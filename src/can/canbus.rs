@@ -70,10 +70,10 @@ impl CanApp {
             // **1. 開啟裝置**
             let status = (self.can_lib.vci_open_device)(dev_type, dev_index, 0);
             if status != 1 {
-                let _ = log_tx.send(format!("裝置打開失敗, 錯誤碼: {}", status));
+                let _ = log_tx.send(format!("Device open failed, Error Code: {}", status));
                 return false;
             }
-            let _ = log_tx.send("裝置打開成功".to_string());
+            let _ = log_tx.send("Device open successfully".to_string());
 
             // **2. 初始化每個 CAN 通道**
             for &(can_channel, baud_rate) in can_channels {
@@ -91,26 +91,24 @@ impl CanApp {
                 let init_status =
                     (self.can_lib.vci_init_can)(dev_type, dev_index, can_channel, &config);
                 if init_status != 1 {
-                    let _ = log_tx.send(format!("CAN 通道 {} 初始化失敗", can_channel));
+                    let _ = log_tx.send(format!("CAN Ch {} initial failed", can_channel));
 
-                    // **如果有任一通道初始化失敗，關閉所有已開啟的通道**
                     self.close_device(dev_type, dev_index, log_tx.clone());
                     return false;
                 }
                 let _ = log_tx.send(format!(
-                    "CAN 通道 {} 初始化成功 (BaudRate: {:?})",
+                    "CAN Ch {} Initialized (BaudRate: {:?})",
                     can_channel, baud_rate
                 ));
             }
 
             self.is_can_initialized.store(true, Ordering::SeqCst);
 
-            // **3. 讀取板卡資訊**
             let mut board_info = VciBoardInfo::default();
             let board_status =
                 (self.can_lib.vci_read_board_info)(dev_type, dev_index, &mut board_info);
             if board_status != 1 {
-                let _ = log_tx.send("讀取板卡資訊失敗".to_string());
+                let _ = log_tx.send("Read board failed".to_string());
                 return false;
             }
 
@@ -118,7 +116,7 @@ impl CanApp {
                 .trim_matches('\0')
                 .to_string();
             let _ = log_tx.send(format!(
-                "板卡資訊: Serial={}, Firmware={}",
+                "Board info: Serial={}, Firmware={}",
                 serial_number, board_info.fw_version
             ));
 
@@ -129,7 +127,7 @@ impl CanApp {
     pub fn close_device(&self, dev_type: u32, dev_index: u32, log_tx: Sender<String>) {
         unsafe {
             let status = (self.can_lib.vci_close_device)(dev_type, dev_index);
-            let _ = log_tx.send(format!("裝置已關閉, 狀態: {}", status));
+            let _ = log_tx.send(format!("Device Closed, Status: {}", status));
             self.is_can_initialized.store(false, Ordering::SeqCst);
         }
     }
@@ -155,12 +153,12 @@ impl CanApp {
                 let start_status = (can_lib.vci_start_can)(dev_type, dev_index, channel);
                 if start_status != 1 {
                     let _ = log_tx.send(format!(
-                        "⚠️ 無法啟動 CAN 通道 {}, 錯誤碼: {}",
+                        "CAN start failed {}, Error Code: {}",
                         channel, start_status
                     ));
                     return;
                 }
-                let _ = log_tx.send(format!("✅ CAN 通道 {} 啟動成功", channel));
+                let _ = log_tx.send(format!("CAN Ch {} started", channel));
             }
             receiving_flag.store(true, Ordering::SeqCst);
 
@@ -177,7 +175,7 @@ impl CanApp {
                         let _ = data_tx.send(msg);
                     }
 
-                    let _ = log_tx.send(format!("📡 CAN 通道 {} 開始接收數據", channel));
+                    let _ = log_tx.send(format!("CAN Ch {} receiv", channel));
 
                     while receiving_flag.load(Ordering::SeqCst) {
                         let mut can_obj = VciCanObj::default();
@@ -194,17 +192,15 @@ impl CanApp {
 
                         if received_frames > 0 {
                             let data = &can_obj.data[..(can_obj.data_len as usize)];
-                            let msg = format!(
-                                "通道 {} | ID=0x{:X}, Data={:?}",
-                                channel, can_obj.id, data
-                            );
+                            let msg =
+                                format!("Ch {} | ID=0x{:X}, Data={:?}", channel, can_obj.id, data);
                             let _ = data_tx.send(msg);
                         }
 
                         thread::sleep(Duration::from_millis(10));
                     }
 
-                    let _ = log_tx.send(format!("🛑 CAN 通道 {} 停止接收數據", channel));
+                    let _ = log_tx.send(format!("CAN Ch {} stop receiv", channel));
                 }
             });
         }
@@ -216,7 +212,7 @@ impl CanApp {
     #[allow(dead_code)]
     pub fn read_board_info(&self, dev_type: u32, dev_index: u32, log_tx: Sender<String>) {
         if !self.is_can_initialized.load(Ordering::SeqCst) {
-            let _ = log_tx.send("錯誤: CAN 尚未初始化，無法讀取板卡資訊".to_string());
+            let _ = log_tx.send("Err: CAN not initialized, no board info".to_string());
             return;
         }
 
@@ -224,7 +220,7 @@ impl CanApp {
         unsafe {
             let status = (self.can_lib.vci_read_board_info)(dev_type, dev_index, &mut board_info);
             if status != 1 {
-                let _ = log_tx.send("讀取板卡資訊失敗".to_string());
+                let _ = log_tx.send("read board failed".to_string());
                 return;
             }
         }
@@ -234,7 +230,7 @@ impl CanApp {
             .to_string();
 
         let msg = format!(
-            "板卡資訊: Serial={}, Firmware={}",
+            "Board info: Serial={}, Firmware={}",
             serial_number, board_info.fw_version
         );
 

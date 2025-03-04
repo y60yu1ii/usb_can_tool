@@ -200,10 +200,10 @@ impl eframe::App for CanGui {
                 self.start_can();
             }
 
-            ui.separator();
-            ui.label("Received Data:");
-            let mut received_data = self.received_data.lock().unwrap();
-            ui.text_edit_multiline(&mut *received_data);
+            // ui.separator();
+            // ui.label("Received Data:");
+            // let mut received_data = self.received_data.lock().unwrap();
+            // ui.text_edit_multiline(&mut *received_data);
         });
     }
 }
