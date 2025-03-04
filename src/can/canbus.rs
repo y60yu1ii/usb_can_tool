@@ -169,7 +169,7 @@ impl CanApp {
 
                 if received_frames > 0 {
                     let data = &can_obj.data[..(can_obj.data_len as usize)];
-                    let msg = format!("ID=0x{:X}, Data={:?}", can_obj.id, data);
+                    let msg = format!("CH={} ID=0x{:X}, Data={:?}", can_channel, can_obj.id, data);
                     let _ = data_tx.send(msg);
                 }
 
