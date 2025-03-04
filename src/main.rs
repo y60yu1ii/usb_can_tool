@@ -235,11 +235,6 @@ impl eframe::App for CanGui {
             if ui.button("Stop CAN Communication").clicked() {
                 self.stop_can();
             }
-
-            // ui.separator();
-            // ui.label("Received Data:");
-            // let mut received_data = self.received_data.lock().unwrap();
-            // ui.text_edit_multiline(&mut *received_data);
         });
     }
 }
