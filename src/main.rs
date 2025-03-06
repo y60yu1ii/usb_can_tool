@@ -1,7 +1,7 @@
 mod can;
 use crate::can::canbus::*;
 use crate::can::cantypes::*;
-use std::{thread, time::Duration};
+use std::thread;
 
 use eframe::egui;
 use flume::unbounded;
@@ -53,8 +53,6 @@ impl CanGui {
         let is_receiving_clone = Arc::clone(&self.is_receiving);
         let can_app_clone = Arc::clone(&self.can_app);
 
-        // let received_data_clone = Arc::clone(&self.received_data);
-
         {
             let mut receiving = is_receiving_clone.lock().unwrap();
             *receiving = true;
@@ -76,13 +74,6 @@ impl CanGui {
                 println!("[DATA] {}", data);
             }
         });
-
-        // thread::spawn(move || {
-        //     while let Ok(data) = data_rx.lock().unwrap().recv() {
-        //         let mut received_data = received_data_clone.lock().unwrap();
-        //         *received_data = format!("{}\n{}", *received_data, data);
-        //     }
-        // });
 
         let mut can_app = can_app_clone.lock().unwrap();
         *can_app = Some(CanApp::new());
@@ -113,9 +104,9 @@ impl CanGui {
                     log_tx.clone(),
                     data_tx.clone(),
                 );
-                thread::sleep(Duration::from_secs(10));
-                can_app.stop_receiving();
-                can_app.close_device(dev_type, dev_index, log_tx.clone());
+                // thread::sleep(Duration::from_secs(10));
+                // can_app.stop_receiving();
+                // can_app.close_device(dev_type, dev_index, log_tx.clone());
             }
             CanApi::Pcan => {
                 let can_app = PcanApp::new();
@@ -137,19 +128,20 @@ impl CanGui {
                     log_tx.clone(),
                     data_tx.clone(),
                 );
-                thread::sleep(Duration::from_secs(10));
-                can_app.stop_receiving();
-                can_app.close_device(dev_type, dev_index, channel, log_tx.clone());
             }
         }
     }
 
     fn stop_can(&self) {
+        let (log_tx, _) = unbounded();
         let mut receiving = self.is_receiving.lock().unwrap();
         *receiving = false;
+        let dev_type: u32 = 4;
+        let dev_index: u32 = 0;
 
         if let Some(can_app) = &*self.can_app.lock().unwrap() {
             can_app.stop_receiving();
+            can_app.close_device(dev_type, dev_index, log_tx.clone());
         }
     }
 }
