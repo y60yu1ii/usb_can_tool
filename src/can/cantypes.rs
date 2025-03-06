@@ -122,7 +122,7 @@ impl VciCanBaudRate {
     }
 }
 
-// PCAN 相關結構
+/// PCAN 相關結構
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PcanMsg {
@@ -187,12 +187,12 @@ pub enum PcanBaudRate {
 }
 
 impl PcanBaudRate {
-    /// **將 `PcanBaudRate` 轉換成 `u16` (適用於 PCAN API)**
+    /// 將 `PcanBaudRate` 轉換成 `u16` (適用於 PCAN API)
     pub fn to_u16(self) -> u16 {
         self as u16
     }
 
-    /// **從 `u32` 轉換成 `PcanBaudRate` (用戶輸入數字)**
+    /// 從 `u32` 轉換成 `PcanBaudRate` (用戶輸入數字)
     pub fn from_u32(value: u32) -> Option<Self> {
         match value {
             1000 => Some(PcanBaudRate::Baud1M),
@@ -214,6 +214,7 @@ impl PcanBaudRate {
     }
 }
 
+/// 共用的 CAN 波特率型別，用以區分 ControlCAN 與 PCAN
 #[derive(Debug, Clone, Copy)]
 pub enum CanBaudRate {
     ControlCan(VciCanBaudRate),
