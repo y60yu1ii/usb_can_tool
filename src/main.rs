@@ -1,12 +1,17 @@
 mod can;
 use crate::can::canbus::*;
 use crate::can::cantypes::*;
+use crate::can::config;
+
 use eframe::egui;
 use flume::{unbounded, RecvTimeoutError};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
+// 新增：引入檔案對話框 (rfd)
+use rfd::FileDialog;
 
 #[derive(PartialEq)]
 enum CanApi {
@@ -22,7 +27,6 @@ const PCAN_BAUD_RATES: [u32; 14] = [5, 10, 20, 33, 47, 50, 83, 95, 100, 125, 250
 const DATA_BUFFER_CAPACITY: usize = 1000;
 const LOG_BUFFER_CAPACITY: usize = 1000;
 
-/// GUI 程式邏輯，使用 trait 物件儲存不同 CAN API 實作
 struct CanGui {
     api: CanApi,
     controlcan_ch1: u32,
@@ -34,6 +38,8 @@ struct CanGui {
     can_app: Arc<Mutex<Option<Box<dyn CanInterface + Send>>>>,
     logs: Arc<Mutex<VecDeque<String>>>,
     data: Arc<Mutex<VecDeque<String>>>,
+    // 新增一個欄位，用來儲存載入 YAML 中的 components
+    yaml_components: Option<Vec<config::Component>>,
 }
 
 impl Default for CanGui {
@@ -49,6 +55,7 @@ impl Default for CanGui {
             can_app: Arc::new(Mutex::new(None)),
             logs: Arc::new(Mutex::new(VecDeque::with_capacity(LOG_BUFFER_CAPACITY))),
             data: Arc::new(Mutex::new(VecDeque::with_capacity(DATA_BUFFER_CAPACITY))),
+            yaml_components: None,
         }
     }
 }
@@ -118,7 +125,6 @@ impl CanGui {
             });
         }
 
-        // 設定裝置參數（dev_type 與 dev_index 固定為 4 與 0）
         let dev_type: u32 = 4;
         let dev_index: u32 = 0;
 
@@ -136,7 +142,6 @@ impl CanGui {
                             .unwrap_or(VciCanBaudRate::Baud1M),
                     ),
                 ];
-                // 建立 ControlCAN 實作
                 let can_app = CanApp::new(dev_type, dev_index, channels);
                 if let Err(err) = can_app.open_device(log_tx.clone()) {
                     eprintln!("ControlCAN open device failed: {}", err);
@@ -148,7 +153,6 @@ impl CanGui {
                 *can_app_guard = Some(Box::new(can_app));
             }
             CanApi::Pcan => {
-                // 建立 PCAN 實作，channel 固定為 0x51
                 let channel: u32 = 0x51;
                 let pcan_baud =
                     PcanBaudRate::from_u32(self.pcan_baud).unwrap_or(PcanBaudRate::Baud250K);
@@ -174,7 +178,6 @@ impl CanGui {
             }
             *rec = false;
         }
-        // 利用一組空的 log_tx 呼叫 close_device
         let (log_tx, _) = unbounded();
         if let Some(ref can_app) = *self.can_app.lock().unwrap() {
             can_app.stop_receiving();
@@ -254,6 +257,25 @@ impl eframe::App for CanGui {
                     });
                 }
             }
+            // 新增「Load YAML Config」按鈕，讓使用者可以選取檔案
+            if ui.button("Load YAML Config").clicked() {
+                if let Some(path) = FileDialog::new().pick_file() {
+                    match config::load_config(path.to_str().unwrap()) {
+                        Ok(cfg) => {
+                            let mut logs = self.logs.lock().unwrap();
+                            logs.push_back(format!("[CONFIG] Loaded: {:?}", cfg));
+                            // 儲存載入的 components 到欄位中
+                            // 這裡只取 components 部分，初始值 0 可在 UI 上顯示
+                            self.yaml_components = Some(cfg.components);
+                        }
+                        Err(e) => {
+                            let mut logs = self.logs.lock().unwrap();
+                            logs.push_back(format!("[CONFIG] Failed to load config: {}", e));
+                        }
+                    }
+                }
+            }
+
             ui.horizontal(|ui| {
                 if ui.button("Start CAN").clicked() {
                     self.start_can();
@@ -264,13 +286,31 @@ impl eframe::App for CanGui {
             });
         });
 
+        // 在中央面板中動態生成 YAML 中的 components 對應的 ui label
         egui::CentralPanel::default().show(ctx, |ui| {
+            if let Some(ref comps) = self.yaml_components {
+                ui.heading("YAML Components");
+                for comp in comps.iter() {
+                    let label_text = match &comp.text {
+                        Some(text) => {
+                            format!("{}: {} {}", text, 0, comp.unit.clone().unwrap_or_default())
+                        }
+                        None => format!(
+                            "{}: {} {}",
+                            comp.key,
+                            0,
+                            comp.unit.clone().unwrap_or_default()
+                        ),
+                    };
+                    ui.label(label_text);
+                }
+            }
+            ui.separator();
             ui.columns(2, |cols| {
-                // Log 區
                 cols[0].vertical(|ui| {
                     ui.heading("Log");
                     egui::ScrollArea::vertical()
-                        .id_source("logs_scroll_area")
+                        .id_salt("logs_scroll_area")
                         .stick_to_bottom(true)
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
@@ -280,11 +320,10 @@ impl eframe::App for CanGui {
                             }
                         });
                 });
-                // Data 區
                 cols[1].vertical(|ui| {
                     ui.heading("Data");
                     egui::ScrollArea::vertical()
-                        .id_source("data_scroll_area")
+                        .id_salt("data_scroll_area")
                         .stick_to_bottom(true)
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {

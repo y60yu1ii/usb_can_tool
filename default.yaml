@@ -1,0 +1,23 @@
+components:
+  - type: Label
+    key: lb1
+    text: "Label1"
+    unit: "lpm"
+  - type: Label
+    text: "Label2"
+    key: lb2
+    unit: "m/s"
+
+canbus_config:
+  - key: lb1
+    id: 0xF2
+    index: 0
+    len: 2
+    endian: 0
+    type: int32
+  - key: lb2
+    id: 0xF2
+    index: 7
+    len: 2
+    endian: 0
+    type: int32
