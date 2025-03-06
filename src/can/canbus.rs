@@ -4,18 +4,24 @@ use libloading::Library;
 use std::ffi::c_void;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::{thread, time::Duration};
 
 const SUCCESS: i32 = 1;
 const PCAN_ERROR_OK: u32 = 0;
 
+/// 定義共通 CAN 介面操作
 pub trait CanInterface {
+    /// 開啟裝置並初始化所有通道
     fn open_device(&self, log_tx: Sender<String>) -> Result<(), String>;
+    /// 關閉裝置
     fn close_device(&self, log_tx: Sender<String>);
+    /// 啟動接收訊息（內部 spawn 執行緒，並儲存 JoinHandle）
     fn start_receiving(&self, log_tx: Sender<String>, data_tx: Sender<String>);
+    /// 停止接收訊息，並等待所有接收執行緒退出
     fn stop_receiving(&self);
+    /// 讀取並回報板卡資訊
     fn read_board_info(&self, log_tx: Sender<String>);
 }
 
@@ -55,6 +61,7 @@ impl CanLibrary {
     }
 }
 
+/// ControlCAN 應用程式，將裝置參數存入 struct 內
 pub struct CanApp {
     pub can_lib: Arc<CanLibrary>,
     pub receiving: Arc<AtomicBool>,
@@ -62,9 +69,11 @@ pub struct CanApp {
     dev_type: u32,
     dev_index: u32,
     can_channels: Vec<(u32, VciCanBaudRate)>,
+    join_handles: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
 }
 
 impl CanApp {
+    /// 建立新的 CanApp
     pub fn new(dev_type: u32, dev_index: u32, can_channels: Vec<(u32, VciCanBaudRate)>) -> Self {
         let can_lib = CanLibrary::new("ControlCAN.dll");
         Self {
@@ -74,9 +83,11 @@ impl CanApp {
             dev_type,
             dev_index,
             can_channels,
+            join_handles: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
+    /// 封裝 unsafe 呼叫：開啟裝置
     unsafe fn open_device_unsafe(&self) -> Result<(), String> {
         let status = (self.can_lib.vci_open_device)(self.dev_type, self.dev_index, 0);
         if status != SUCCESS {
@@ -86,6 +97,7 @@ impl CanApp {
         }
     }
 
+    /// 封裝 unsafe 呼叫：初始化單一 CAN 通道
     unsafe fn init_channel(&self, channel: u32, baud_rate: VciCanBaudRate) -> Result<(), String> {
         let (timing0, timing1) = baud_rate.to_timing_values();
         let config = VciInitConfig {
@@ -106,6 +118,7 @@ impl CanApp {
         }
     }
 
+    /// 封裝 unsafe 呼叫：讀取板卡資訊
     unsafe fn read_board_info_unsafe(&self) -> Result<VciBoardInfo, String> {
         let mut board_info = VciBoardInfo::default();
         let board_status =
@@ -174,36 +187,36 @@ impl CanInterface for CanApp {
     }
 
     fn start_receiving(&self, log_tx: Sender<String>, data_tx: Sender<String>) {
-        let receiving_flag = Arc::clone(&self.receiving);
-        let can_lib = Arc::clone(&self.can_lib);
+        self.receiving.store(true, Ordering::SeqCst);
         let dev_type = self.dev_type;
         let dev_index = self.dev_index;
+        let receiving_flag = Arc::clone(&self.receiving);
+        let can_lib = Arc::clone(&self.can_lib);
+        let join_handles_clone = Arc::clone(&self.join_handles);
 
         for &(channel, _) in &self.can_channels {
             let log_tx_clone = log_tx.clone();
             let data_tx_clone = data_tx.clone();
-            let receiving_flag_clone = Arc::clone(&receiving_flag);
-            let can_lib_clone = Arc::clone(&can_lib);
-
-            unsafe {
-                let start_status = (can_lib_clone.vci_start_can)(dev_type, dev_index, channel);
-                if start_status != SUCCESS {
-                    let _ = log_tx_clone.send(format!(
-                        "CAN start failed on channel {}, Error Code: {}",
-                        channel, start_status
-                    ));
-                    continue;
+            let receiving_flag_channel = Arc::clone(&receiving_flag);
+            let can_lib_channel = Arc::clone(&can_lib);
+            let handle = thread::spawn(move || {
+                // 啟動該通道
+                unsafe {
+                    let start_status =
+                        (can_lib_channel.vci_start_can)(dev_type, dev_index, channel);
+                    if start_status != SUCCESS {
+                        let _ = log_tx_clone.send(format!(
+                            "CAN start failed on channel {}, Error Code: {}",
+                            channel, start_status
+                        ));
+                        return;
+                    }
+                    let _ = log_tx_clone.send(format!("CAN Ch {} started", channel));
                 }
-                let _ = log_tx_clone.send(format!("CAN Ch {} started", channel));
-            }
-
-            receiving_flag_clone.store(true, Ordering::SeqCst);
-
-            thread::spawn(move || {
-                while receiving_flag_clone.load(Ordering::SeqCst) {
+                while receiving_flag_channel.load(Ordering::SeqCst) {
                     let mut can_obj = VciCanObj::default();
                     let received_frames = unsafe {
-                        (can_lib_clone.vci_receive)(
+                        (can_lib_channel.vci_receive)(
                             dev_type,
                             dev_index,
                             channel,
@@ -221,11 +234,20 @@ impl CanInterface for CanApp {
                 }
                 let _ = log_tx_clone.send(format!("CAN Ch {} stopped receiving", channel));
             });
+            // 將執行緒的 JoinHandle 存起來
+            join_handles_clone.lock().unwrap().push(handle);
         }
     }
 
     fn stop_receiving(&self) {
         self.receiving.store(false, Ordering::SeqCst);
+        // 取得 join handle 並等待所有線程結束
+        let mut handles = self.join_handles.lock().unwrap();
+        while let Some(handle) = handles.pop() {
+            if let Err(e) = handle.join() {
+                eprintln!("Error joining thread: {:?}", e);
+            }
+        }
     }
 
     fn read_board_info(&self, log_tx: Sender<String>) {
@@ -252,6 +274,7 @@ impl CanInterface for CanApp {
     }
 }
 
+/// 封裝 PCAN 動態函式庫
 pub struct PcanLibrary {
     _lib: Arc<Library>,
     pub can_initialize: unsafe extern "C" fn(u32, u32, u32, u32, u32) -> u32,
@@ -285,15 +308,18 @@ impl PcanLibrary {
     }
 }
 
+/// PCAN 應用程式，將頻道與波特率存入 struct 內
 pub struct PcanApp {
     pub can_lib: Arc<PcanLibrary>,
     pub receiving: Arc<AtomicBool>,
     pub is_can_initialized: Arc<AtomicBool>,
     channel: u32,
     baud_rate: PcanBaudRate,
+    join_handles: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
 }
 
 impl PcanApp {
+    /// 建立新的 PcanApp
     pub fn new(channel: u32, baud_rate: PcanBaudRate) -> Self {
         let can_lib = PcanLibrary::new("PCANBasic.dll");
         Self {
@@ -302,9 +328,11 @@ impl PcanApp {
             is_can_initialized: Arc::new(AtomicBool::new(false)),
             channel,
             baud_rate,
+            join_handles: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
+    /// 封裝 unsafe 呼叫：初始化 PCAN 頻道
     unsafe fn initialize_channel(&self) -> Result<(), String> {
         self.force_close_internal();
         let baudrate_value = self.baud_rate.to_u16() as u32;
@@ -319,8 +347,8 @@ impl PcanApp {
         }
     }
 
+    /// 封裝 unsafe 呼叫：配置 PCAN 參數
     unsafe fn configure_channel(&self, log_tx: &Sender<String>) {
-        // 啟用接收所有訊息
         const PCAN_MESSAGE_FILTER: u32 = 0x04;
         const PCAN_FILTER_OPEN: u32 = 1;
         let filter_status = (self.can_lib.can_set_value)(
@@ -334,8 +362,6 @@ impl PcanApp {
         } else {
             let _ = log_tx.send("PCAN message filter enabled.".to_string());
         }
-
-        // 關閉 Listen-Only 模式
         const PCAN_LISTEN_ONLY: u32 = 0x08;
         const PCAN_PARAMETER_OFF: u32 = 0;
         let listen_status = (self.can_lib.can_set_value)(
@@ -349,8 +375,6 @@ impl PcanApp {
         } else {
             let _ = log_tx.send("PCAN listen-only mode disabled.".to_string());
         }
-
-        // 啟用 Bus-Off 自動重置
         const PCAN_BUSOFF_AUTORESET: u32 = 0x07;
         const PCAN_PARAMETER_ON: u32 = 1;
         let reset_status = (self.can_lib.can_set_value)(
@@ -401,13 +425,13 @@ impl CanInterface for PcanApp {
     }
 
     fn start_receiving(&self, log_tx: Sender<String>, data_tx: Sender<String>) {
+        self.receiving.store(true, Ordering::SeqCst);
+        let channel = self.channel;
         let receiving_flag = Arc::clone(&self.receiving);
         let can_lib = Arc::clone(&self.can_lib);
-        let channel = self.channel;
-        let _ = log_tx.send(format!("PCAN channel 0x{:X} ready for receiving", channel));
-        receiving_flag.store(true, Ordering::SeqCst);
-
-        thread::spawn(move || {
+        let join_handles_clone = Arc::clone(&self.join_handles);
+        let handle = thread::spawn(move || {
+            let _ = log_tx.send(format!("PCAN channel 0x{:X} ready for receiving", channel));
             while receiving_flag.load(Ordering::SeqCst) {
                 let mut pcan_msg = PcanMsg::default();
                 let status = unsafe { (can_lib.can_read)(channel, &mut pcan_msg) };
@@ -419,10 +443,17 @@ impl CanInterface for PcanApp {
                 thread::sleep(Duration::from_millis(10));
             }
         });
+        join_handles_clone.lock().unwrap().push(handle);
     }
 
     fn stop_receiving(&self) {
         self.receiving.store(false, Ordering::SeqCst);
+        let mut handles = self.join_handles.lock().unwrap();
+        while let Some(handle) = handles.pop() {
+            if let Err(e) = handle.join() {
+                eprintln!("Error joining PCAN thread: {:?}", e);
+            }
+        }
     }
 
     fn read_board_info(&self, log_tx: Sender<String>) {
